@@ -23,19 +23,23 @@
 
 #define USAGE "Usage: server <port>\n"
 #define NAME "guest"
+#define MSG_MAX_SIZE 4096
 #define SUCCESS 0
 #define FAILURE -1
 #define TRUE 1
 #define FALSE 0
 
-#define P_DEBUG
+
+//#define P_DEBUG
 
 typedef int bool_t;
 
 typedef struct s_attributes {
     slist_t *write_msg;
     slist_t *clients;
-    int sock_fd;
+    bool_t drop_clients;
+    char* peek_buffer;
+    int main_fd;
     int max_fd;
     fd_set *read_fds;
     fd_set *write_fds;
@@ -44,13 +48,8 @@ typedef struct s_attributes {
 typedef struct _client_data{
     int client_fd;
     char* id;
-    slist_t *msg;
 }client_data;
 
-typedef struct _s_message{
-    char* str_message;
-    int lenght;
-}chat_message;
 /*-------------------------GLOBAL VARIABLES-----------------------------------*/
 server_attr *alloc_memory;
 
@@ -72,21 +71,22 @@ server_attr* init_attribs(int sock_fd);
 
 int init_sets(server_attr* this);
 
-bool_t read_from_clients(server_attr* this);
+int read_from_clients(server_attr* this);
 
 int write_to_clients(server_attr* this);
 
-int push_mesasge(client_data* client, server_attr* this, chat_message* message);
+int receive_message(client_data* client, server_attr* server_at);
 
-void destroy_cmessage_list(slist_t* list);
+int send_message(char* message, int client_fd);
 
-chat_message* receive_message(client_data* client, server_attr* this);
-
-int send_message(chat_message* message, int client_fd);
-
+int delete_clients(server_attr* server_at);
 
 /*------------------------------M A I N---------------------------------------*/
 int main(int argc, const char * argv[]) {
+    if (argc < 2){
+            printf(USAGE);
+            exit(EXIT_FAILURE);
+    }
     int port = atoi(argv[1]);
     int sock_fd;
     
@@ -147,8 +147,9 @@ int init_server(int port){
 
 //----------------------------------------------------------------------------//
 void sigint_handler(int signum){
-    printf("Server shutdown\n");
+    printf("\nServer shutdown\n");
     free_memory(alloc_memory);
+    exit(EXIT_SUCCESS);
 }
 
 //----------------------------------------------------------------------------//
@@ -164,10 +165,11 @@ server_attr* init_attribs(int sock_fd){
     if (!new)
         return NULL;
     
-    new->sock_fd = sock_fd;
+    new->main_fd = sock_fd;
     new->write_fds = NULL;
     new->read_fds = NULL;
     new->max_fd = sock_fd;
+    new->drop_clients = FALSE;
     new->clients = (slist_t*)malloc(sizeof(slist_t));
     if (!new->clients){
         free_memory(new);
@@ -179,6 +181,12 @@ server_attr* init_attribs(int sock_fd){
         free(new);
         return NULL;
     }
+    new->peek_buffer = (char*)malloc(sizeof(char)*MSG_MAX_SIZE);
+    if (!new->peek_buffer){
+        free(new->write_msg);
+        free(new->clients);
+        free(new);
+    }
     
     slist_init(new->clients);
     slist_init(new->write_msg);
@@ -187,18 +195,17 @@ server_attr* init_attribs(int sock_fd){
 
 //----------------------------------------------------------------------------//
 void free_memory(server_attr *dealloc_m){
-   
-    destroy_cmessage_list(dealloc_m->write_msg);
-    
     client_data* next_client=(client_data*)slist_pop_first(dealloc_m->clients);
     while (next_client != NULL) {
-        destroy_cmessage_list(next_client->msg);
         free(next_client->id);
         free(next_client);
         next_client = (client_data*)slist_pop_first(dealloc_m->clients);
     }
     slist_destroy(dealloc_m->clients, SLIST_LEAVE_DATA);
+    slist_destroy(dealloc_m->write_msg, SLIST_FREE_DATA);
+    free(dealloc_m->write_msg);
     free(dealloc_m->clients);
+    free(dealloc_m->peek_buffer);
     free(dealloc_m);
     db_print("all memory deallocated successesfuly");
     
@@ -206,7 +213,6 @@ void free_memory(server_attr *dealloc_m){
 
 //----------------------------------------------------------------------------//
 void chat_routine(server_attr *this){
-    bool_t data_to_write = FALSE;
     int new_fd;
     fd_set read_fds;
     fd_set write_fds;
@@ -217,23 +223,32 @@ void chat_routine(server_attr *this){
     while (1) {
         init_sets(this);
         if (select((this->max_fd)+1,
-                   this->read_fds,
-                   this->write_fds, 0, 0)<0){
-            perror("select error");
-            free_memory(this);
-            return;
+                   this->read_fds, 0, 0, 0)<0){
+            if (errno != EINTR){
+                perror("select error");
+                free_memory(this);
+                return;
+            }
         }
         /*checking if there is new connection requests*/
-        if(FD_ISSET(this->sock_fd,this->read_fds)){
-            new_fd = accept/*4*/(this->sock_fd,
-                            (struct sockaddr*)&cli_addr, &clilen/*, O_NONBLOCK*/);
-            connect_client(this, new_fd);
+        if(FD_ISSET(this->main_fd,this->read_fds)){
+            new_fd = accept(this->main_fd,
+                            (struct sockaddr*)&cli_addr, &clilen);
+            if (new_fd == -1){
+                perror("fail of accept");
+            }
+            else
+                connect_client(this, new_fd);
         }
-        data_to_write = read_from_clients(this);
         
-        if (data_to_write)
-            write_to_clients(this);
         
+        
+        read_from_clients(this);
+        
+        write_to_clients(this);
+        
+        if (this->drop_clients)
+            delete_clients(this);
     }
 }
 
@@ -252,20 +267,13 @@ int connect_client(server_attr *this, int new_fd){
         for (i=0; temp>0; i++)
             temp = temp/base;
     
-    new_client->id = (char*)malloc(sizeof(char)*(i+strlen(NAME)+1));
+    new_client->id = (char*)malloc(sizeof(char)*(i+strlen(NAME)+3));
     if (!new_client->id) {
         free(new_client);
         return FAILURE;
     }
-    snprintf(new_client->id, (i+strlen(NAME)+1), "%s%d",NAME,new_fd);
-    
-    new_client->msg = (slist_t*)malloc(sizeof(slist_t));
-    if (!new_client->msg){
-        free(new_client->id);
-        free(new_client);
-        return FAILURE;
-    }
-    slist_init(new_client->msg);
+    snprintf(new_client->id, (i+strlen(NAME)+3), "%s%d: ",NAME,new_fd);
+
     
     db_print("new client connected:");
     db_print(new_client->id);
@@ -276,90 +284,191 @@ int connect_client(server_attr *this, int new_fd){
     return SUCCESS;
 }
 
+//----------------------------------------------------------------------------//
 int init_sets(server_attr* this){
     slist_node_t* node = slist_head(this->clients);
     client_data* client = NULL;
     db_print("at sets initialization");
     FD_ZERO(this->read_fds);
     FD_ZERO(this->write_fds);
-    FD_SET(this->sock_fd, this->read_fds);
-    
+    FD_SET(this->main_fd, this->read_fds);
     while (node) {
         client = (client_data*)slist_data(node);
         FD_SET(client->client_fd, this->read_fds);
-        
+        FD_SET(client->client_fd, this->write_fds);
         node = slist_next(node);
     }
     
     return SUCCESS;
 }
 
-bool_t read_from_clients(server_attr* this){
+//----------------------------------------------------------------------------//
+int read_from_clients(server_attr* this){
     db_print("reading from clients");
     slist_node_t* node = slist_head(this->clients);
     client_data* client = NULL;
-    bool_t exist_message = FALSE;;
+    int receive_error = FALSE;
     
     while (node) {
         client = (client_data*)slist_data(node);
-        /*Cheking if there is messages in the client queue*/
-        if (slist_head(client->msg)){
-            exist_message = TRUE;
-            push_mesasge(client, this, NULL);
-        }
-            
-        if (FD_ISSET(client->client_fd, this->read_fds)){
-            printf("server is ready to read");
-            printf("from socket %d\n", client->client_fd);
-            exist_message = TRUE;
-            chat_message* message = receive_message(client, this);
-            if (!message){
-                perror("error on receive");
-                free_memory(this);
-                exit(EXIT_FAILURE);
+        /*Cheking if there is messages*/
+        if (client->client_fd != -1){
+            if (FD_ISSET(client->client_fd, this->read_fds)){
+                printf("server is ready to read ");
+                printf("from socket %d\n", client->client_fd);
+                receive_error = receive_message(client, this);
+                if (receive_error == FAILURE){
+                    perror("error on receive");
+                    free_memory(this);
+                    exit(EXIT_FAILURE);
+                }
             }
-            push_mesasge(client, this, message);
         }
-        
         node = slist_next(node);
     }
     
-    return exist_message;
+    return SUCCESS;
 }
 
+//----------------------------------------------------------------------------//
 int write_to_clients(server_attr* this){
     slist_node_t* c_node;
     client_data* client;
-    chat_message* message = (chat_message*)slist_pop_first(this->write_msg);
+    bool_t sent = FALSE;
+    int flag;
+    char* message = (char*)slist_pop_first(this->write_msg);
     while (message) {
         c_node = slist_head(this->clients);
         while (c_node) {
             client = (client_data*)slist_data(c_node);
-            if (FD_ISSET(client->client_fd, this->write_fds)){
-                printf("Server is ready to write to socket %d\n"
-                                                        ,client->client_fd);
-                send_message(message, client->client_fd);
+            if (client->client_fd != -1){
+                if (FD_ISSET(client->client_fd, this->write_fds)){
+                    printf("Server is ready to write to socket %d\n"
+                                                            ,client->client_fd);
+                    flag = send_message(message, client->client_fd);
+                    if (flag == SUCCESS)
+                        sent = TRUE;
+                }
             }
+            c_node = slist_next(c_node);
         }
-        free(message->str_message);
+        if (!sent){//if wasn't able to write to any client
+            slist_prepend(this->write_msg, message);
+            return SUCCESS;
+        }
         free(message);
-        message = (chat_message*)slist_pop_first(this->write_msg);
+        message = (char*)slist_pop_first(this->write_msg);
     }
     return SUCCESS;
 }
 
-int push_mesasge(client_data* client, server_attr* this, chat_message* message){
-    if (!message){
-       
+//----------------------------------------------------------------------------//
+int receive_message(client_data* client, server_attr* server_at){
+    ssize_t to_read = 0;
+    ssize_t peek_recvd, rc = 0;
+    char* ptr, *message, *write_ptr;
+    const char* EOL = "\r\n";
+    memset(server_at->peek_buffer, '\0', MSG_MAX_SIZE);
+    
+    peek_recvd = recv(client->client_fd,
+                      server_at->peek_buffer,
+                      MSG_MAX_SIZE,
+                      MSG_DONTWAIT | MSG_PEEK);
+    if (peek_recvd < 1){
+        if (errno == EAGAIN || errno == EWOULDBLOCK){
+            return SUCCESS;
+        }
+        else if (errno == ECONNRESET || peek_recvd == 0){
+            client->client_fd = -1;
+            server_at->drop_clients = TRUE;
+            db_print("connection forced to close");
+            return SUCCESS;
+            
+        }
+        fprintf(stderr, "receive from clint %d ",client->client_fd);
+        perror("error");
+        return FAILURE;
     }
+    
+    //checking if end line token received
+    ptr = strstr(server_at->peek_buffer, EOL);
+    if (!ptr){
+        read(client->client_fd, server_at->peek_buffer, peek_recvd);
+        return SUCCESS;
+        
+    }
+   
+    ptr += 2;
+    to_read = ptr - server_at->peek_buffer; //number of bytes to read
+    message = (char*)malloc(sizeof(char)*(to_read+strlen(client->id)+1));
+    if (!message)
+        return FAILURE;
+    strcpy(message, client->id);
+    write_ptr = message+strlen(client->id);
+    while (to_read > 0) {
+        rc = read(client->client_fd,
+                  write_ptr,
+                  to_read);
+        if(rc<0){
+            free(message);
+            return SUCCESS;
+        }
+        
+        write_ptr += rc;
+        to_read -= rc;
+    }
+    *write_ptr = '\0';
+    db_print("receiving message ended successfuly");
+    db_print(message);
+    
+    slist_append(server_at->write_msg, message);
+    return SUCCESS;
 }
 
-void destroy_cmessage_list(slist_t* list){
-    chat_message* message=(chat_message*)slist_pop_first(list);
-    while (message) {
-        free(message->str_message);
-        free(message);
+//----------------------------------------------------------------------------//
+int send_message(char* message, int client_fd){
+    ssize_t to_write = strlen(message);
+    ssize_t wc;
+    
+    while (to_write) {
+        wc = send(client_fd, message, to_write, MSG_DONTWAIT);
+        if (wc < 0){
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return SUCCESS;
+            perror("error while sending message");
+            return FAILURE;
+        }
+        to_write -= wc;
+        message += wc;
     }
-    slist_destroy(list, SLIST_LEAVE_DATA);
-    free(list);
+    return SUCCESS;
 }
+
+//----------------------------------------------------------------------------//
+int delete_clients( server_attr* server_at){
+    server_at->max_fd = server_at->main_fd;
+    client_data* current = (client_data*)slist_pop_first(server_at->clients);
+    slist_t* new_list = (slist_t*)malloc(sizeof(slist_t));
+    if (!new_list){
+        free_memory(server_at);
+        return FAILURE;
+    }
+    slist_init(new_list);
+    while (current) {
+        if (current->client_fd == -1){
+            free(current->id);
+            free(current);
+        }
+        else {
+            server_at->max_fd = server_at->max_fd > current->client_fd ?
+            server_at->max_fd : current->client_fd;
+            slist_append(new_list, current);
+        }
+        current = (client_data*)slist_pop_first(server_at->clients);
+    }
+    slist_destroy(server_at->clients, SLIST_LEAVE_DATA);
+    free(server_at->clients);
+    server_at->clients = new_list;
+    return SUCCESS;
+}
+
