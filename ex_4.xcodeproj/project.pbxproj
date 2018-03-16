@@ -7,7 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5059176520502A3E0032A4D8 /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = 5059176420502A3E0032A4D8 /* main.c */; };
+		5059176520502A3E0032A4D8 /* chatserver.c in Sources */ = {isa = PBXBuildFile; fileRef = 5059176420502A3E0032A4D8 /* chatserver.c */; };
+		5059176D205035CB0032A4D8 /* slist.c in Sources */ = {isa = PBXBuildFile; fileRef = 5059176B205035CB0032A4D8 /* slist.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -24,7 +25,9 @@
 
 /* Begin PBXFileReference section */
 		5059176120502A3E0032A4D8 /* ex_4 */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ex_4; sourceTree = BUILT_PRODUCTS_DIR; };
-		5059176420502A3E0032A4D8 /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
+		5059176420502A3E0032A4D8 /* chatserver.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = chatserver.c; sourceTree = "<group>"; };
+		5059176B205035CB0032A4D8 /* slist.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = slist.c; sourceTree = "<group>"; };
+		5059176C205035CB0032A4D8 /* slist.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = slist.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,7 +60,9 @@
 		5059176320502A3E0032A4D8 /* ex_4 */ = {
 			isa = PBXGroup;
 			children = (
-				5059176420502A3E0032A4D8 /* main.c */,
+				5059176420502A3E0032A4D8 /* chatserver.c */,
+				5059176B205035CB0032A4D8 /* slist.c */,
+				5059176C205035CB0032A4D8 /* slist.h */,
 			);
 			path = ex_4;
 			sourceTree = "<group>";
@@ -119,7 +124,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5059176520502A3E0032A4D8 /* main.c in Sources */,
+				5059176520502A3E0032A4D8 /* chatserver.c in Sources */,
+				5059176D205035CB0032A4D8 /* slist.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

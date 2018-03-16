@@ -1,5 +1,5 @@
 //
-//  main.c
+//  chatserver.c
 //  ex_4
 //
 //  Created by Eliyah Weinberg on 7.3.2018.
@@ -51,10 +51,10 @@ typedef struct _client_data{
 }client_data;
 
 /*-------------------------GLOBAL VARIABLES-----------------------------------*/
-server_attr *alloc_memory;
+server_attr *alloc_memory; //used for signal handler
 
 
-/*---------------------FUNCTION DECLARATION-----------------------------------*/
+/*-----------------------FUNCTION DECLARATION---------------------------------*/
 void sigint_handler(int signum);
 
 void free_memory(server_attr *dealloc_m);
@@ -80,6 +80,7 @@ int receive_message(client_data* client, server_attr* server_at);
 int send_message(char* message, int client_fd);
 
 int delete_clients(server_attr* server_at);
+
 
 /*------------------------------M A I N---------------------------------------*/
 int main(int argc, const char * argv[]) {
@@ -113,10 +114,10 @@ int main(int argc, const char * argv[]) {
 }
 
 
-
-
 /*----------------------FUNCTIONS IMPLEMENTATION------------------------------*/
-
+/*Initilizes server
+ *Returns socket fd that used for client connections
+ */
 int init_server(int port){
     int sock_fd;
     struct sockaddr_in serv_adr;
@@ -160,6 +161,8 @@ void db_print(char* msg){
 }
 
 //----------------------------------------------------------------------------//
+/*Initilizes server attributes
+ *Returns allocated attributes*/
 server_attr* init_attribs(int sock_fd){
     server_attr* new = (server_attr*)malloc(sizeof(server_attr));
     if (!new)
@@ -194,6 +197,8 @@ server_attr* init_attribs(int sock_fd){
 }
 
 //----------------------------------------------------------------------------//
+/*Dealocating all memory resources used for server
+ */
 void free_memory(server_attr *dealloc_m){
     client_data* next_client=(client_data*)slist_pop_first(dealloc_m->clients);
     while (next_client != NULL) {
@@ -241,8 +246,6 @@ void chat_routine(server_attr *this){
                 connect_client(this, new_fd);
         }
         
-        
-        
         read_from_clients(this);
         
         write_to_clients(this);
@@ -273,7 +276,6 @@ int connect_client(server_attr *this, int new_fd){
         return FAILURE;
     }
     snprintf(new_client->id, (i+strlen(NAME)+3), "%s%d: ",NAME,new_fd);
-
     
     db_print("new client connected:");
     db_print(new_client->id);
@@ -390,15 +392,15 @@ int receive_message(client_data* client, server_attr* server_at){
         return FAILURE;
     }
     
+    
+
     //checking if end line token received
     ptr = strstr(server_at->peek_buffer, EOL);
     if (!ptr){
         read(client->client_fd, server_at->peek_buffer, peek_recvd);
         return SUCCESS;
-        
     }
-   
-    ptr += 2;
+    ptr += 2; //counting \r\n
     to_read = ptr - server_at->peek_buffer; //number of bytes to read
     message = (char*)malloc(sizeof(char)*(to_read+strlen(client->id)+1));
     if (!message)
@@ -445,6 +447,7 @@ int send_message(char* message, int client_fd){
 }
 
 //----------------------------------------------------------------------------//
+/*Removes closed sockets from list*/
 int delete_clients( server_attr* server_at){
     server_at->max_fd = server_at->main_fd;
     client_data* current = (client_data*)slist_pop_first(server_at->clients);
